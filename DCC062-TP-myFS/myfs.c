@@ -16,6 +16,7 @@
 #include "util.h"
 
 //Declaracoes globais
+#define MYFS_ID 'M' // Identificador do MyFS
 
 //Estrutura para entrada de diretório
 typedef struct {
@@ -137,5 +138,21 @@ int myFSCloseDir (int fd) {
 //o sistema de arquivos tenha sido registrado com sucesso.
 //Caso contrario, retorna -1
 int installMyFS (void) {
-	return -1;
+	FSInfo *fsInfo = malloc(sizeof(FSInfo));
+	fsInfo->fsid = MYFS_ID;
+	fsInfo->fsname = "MyFS";
+	fsInfo->isidleFn = myFSIsIdle;
+	fsInfo->formatFn = myFSFormat;
+	fsInfo->xMountFn = myFSxMount;
+	fsInfo->openFn = myFSOpen;
+	fsInfo->readFn = myFSRead;
+	fsInfo->writeFn = myFSWrite;
+	fsInfo->closeFn = myFSClose;
+	fsInfo->opendirFn = myFSOpenDir;
+	fsInfo->readdirFn = myFSReadDir;
+	fsInfo->linkFn = myFSLink;
+	fsInfo->unlinkFn = myFSUnlink;
+	fsInfo->closedirFn = myFSCloseDir;
+
+	return vfsRegisterFS(fsInfo);
 }
