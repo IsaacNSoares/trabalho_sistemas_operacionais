@@ -23,6 +23,15 @@ typedef struct {
 	char name[MAX_FILENAME_LENGTH + 1];
 } DirEntry;
 
+//Estrutura interna pra gerenciar arquivos abertos
+typedef struct {
+	int used;						    // 0 = livre | 1 = sendo usado
+	unsigned int inodeNum;	// Numero do Inode associado
+	unsigned int cursor;		// Posicao atual do cursor no arquivo(em bytes)
+	Disk *d;								// Disco em que o arquivo está
+} MyFileHandle;
+
+MyFileHandle openFiles[MAX_FDS];  //Tabela de arquivos abertos
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
