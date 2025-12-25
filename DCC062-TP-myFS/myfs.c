@@ -16,8 +16,12 @@
 #include "util.h"
 
 //Declaracoes globais
-//...
-//...
+
+//Estrutura para entrada de diretório
+typedef struct {
+	unsigned int inode;
+	char name[MAX_FILENAME_LENGTH + 1];
+} DirEntry;
 
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
