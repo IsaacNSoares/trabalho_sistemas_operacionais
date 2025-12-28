@@ -18,6 +18,7 @@
 //Declaracoes globais
 #define MYFS_ID 'M' // Identificador do MyFS
 #define SECTOR_FREE_BLOCK_MAP 1 // Setor para o índice do próximo bloco livre
+#define FIRST_DATA_BLOCK 100 // Setor onde começam os dados
 
 //Estrutura para entrada de diretório
 typedef struct {
@@ -78,7 +79,30 @@ int myFSIsIdle (Disk *d) {
 //blocos disponiveis no disco, se formatado com sucesso. Caso contrario,
 //retorna -1.
 int myFSFormat (Disk *d, unsigned int blockSize) {
-	return -1;
+	
+	//Inicializa o setor de mapa de bits (Next Free Block)
+	unsigned char buffer[DISK_SECTORDATASIZE];
+	unsigned int firstDataBlock = FIRST_DATA_BLOCK;
+
+	ul2char(firstDataBlock, buffer);
+	if(diskWriteSector(d, SECTOR_FREE_BLOCK_MAP, buffer) < 0){
+		return -1;
+	}
+
+	// Cria o Inode raiz (Inode 1)
+	Inode *root = inodeCreate(1, d);
+	if(!root){
+		return -1;
+	}
+
+	inodeSetFileType(root, FILETYPE_DIR);
+	inodeSetFileSize(root, 0);
+	inodeSetOwner(root, 0); // Usuário root
+	inodeSave(root);
+	free(root);
+	
+	// Retorna numero total de blocos (estimado)
+	return diskGetNumSectors(d) - firstDataBlock;
 }
 
 //Funcao para montagem/desmontagem do sistema de arquivos, se possível.
