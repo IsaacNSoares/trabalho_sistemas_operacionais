@@ -17,6 +17,7 @@
 
 //Declaracoes globais
 #define MYFS_ID 'M' // Identificador do MyFS
+#define SECTOR_FREE_BLOCK_MAP 1 // Setor para o índice do próximo bloco livre
 
 //Estrutura para entrada de diretório
 typedef struct {
@@ -33,6 +34,31 @@ typedef struct {
 } MyFileHandle;
 
 MyFileHandle openFiles[MAX_FDS];  //Tabela de arquivos abertos
+
+// Retorna o próximo setor livre e atualiza o contador do disco
+unsigned int __allocBlock(Disk *d) {
+
+	unsigned char buffer[DISK_SECTORDATASIZE];
+	unsigned int nextFree;
+
+	if(diskReadSector(d, SECTOR_FREE_BLOCK_MAP, buffer) < 0){
+		return 0;
+	}
+
+	char2ul(buffer, &nextFree);
+
+	// Verifica se o disco encheu
+	if(nextFree >= diskGetNumSectors(d)){
+		return 0;
+	}
+
+	// Atualiza o próximo livre
+	unsigned int newNextFree = nextFree + 1;
+	ul2char(newNextFree, buffer);
+	diskWriteSector(d, SECTOR_FREE_BLOCK_MAP, buffer);
+
+	return nextFree;
+}
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
