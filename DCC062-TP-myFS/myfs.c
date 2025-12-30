@@ -14,6 +14,7 @@
 #include "vfs.h"
 #include "inode.h"
 #include "util.h"
+#include "string.h"
 
 //Declaracoes globais
 #define MYFS_ID 'M' // Identificador do MyFS
@@ -83,6 +84,9 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 	//Inicializa o setor de mapa de bits (Next Free Block)
 	unsigned char buffer[DISK_SECTORDATASIZE];
 	unsigned int firstDataBlock = FIRST_DATA_BLOCK;
+
+	// Limpa o buffer com zeros
+	memset(buffer, 0, DISK_SECTORDATASIZE);
 
 	ul2char(firstDataBlock, buffer);
 	if(diskWriteSector(d, SECTOR_FREE_BLOCK_MAP, buffer) < 0){
