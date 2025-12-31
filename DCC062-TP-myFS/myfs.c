@@ -62,6 +62,43 @@ unsigned int __allocBlock(Disk *d) {
 	return nextFree;
 }
 
+// Busca um inode pelo nome dentro de um diretório pai
+// Retorna o numero do inode se achar, ou 0 se não achar
+unsigned int __findInodeInDir(Disk *d, unsigned int parentInodeNum, const char *name){
+
+	Inode *parent = inodeLoad(parentInodeNum, d);
+	if(!parent){
+		return 0;
+	}
+
+	unsigned int numBlocks = inodeGetFileSize(parent) / DISK_SECTORDATASIZE;
+	if(inodeGetFileSize(parent) % DISK_SECTORDATASIZE != 0){
+		numBlocks++;
+	}
+
+	unsigned char buffer[DISK_SECTORDATASIZE];
+	DirEntry *entry;
+
+	for(unsigned int i = 0; i < numBlocks; i++){
+		unsigned int blockAddr = inodeGetBlockAddr(parent, i);
+		if(blockAddr == 0){
+			continue;
+		}
+
+		if(diskReadSector(d, blockAddr, buffer) == 0){
+			entry = (DirEntry *)buffer;
+			if(entry->inode != 0 && strcmp(entry->name, name) == 0){
+				free(parent);
+				return entry->inode;
+			}
+		}
+
+	}
+
+	free(parent);
+	return 0;
+}
+
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
 //um positivo se ocioso ou, caso contrario, 0.
