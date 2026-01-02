@@ -99,6 +99,37 @@ unsigned int __findInodeInDir(Disk *d, unsigned int parentInodeNum, const char *
 	return 0;
 }
 
+// Resolve um caminho e retorna o inode correspondente
+// Retorna 0 se não existir
+unsigned int __resolvePath(Disk *d, const char *path){
+
+	if(path[0] != '/'){
+		return 0; // O caminho deve ser absoluto
+	}
+
+	if(strcmp(path, "/") == 0){
+		return 1; // Raiz é sempre 1
+	}
+
+	char pathCopy[MAX_FILENAME_LENGTH + 1];
+	strncpy(pathCopy, path, MAX_FILENAME_LENGTH);
+
+	unsigned int currentInode = 1;
+	char *token = strtok(pathCopy, "/");
+
+	while(token != NULL){
+		unsigned int nextInode = __findInodeInDir(d, currentInode, token);
+		if(nextInode == 0){
+			return 0; // Não achou parte do caminho
+		}
+
+		currentInode = nextInode;
+		token = strtok(NULL, "/");
+	}
+
+	return currentInode;
+}
+
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
 //um positivo se ocioso ou, caso contrario, 0.
@@ -160,7 +191,18 @@ int myFSxMount (Disk *d, int x) {
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
 int myFSOpen (Disk *d, const char *path) {
-	return -1;
+
+  printf("\n[DEBUG] Buscando caminho: %s\n", path);
+
+	unsigned int inodeNum = __resolvePath(d, path);
+
+	printf("[DEBUG] __resolvePath retornou Inode: %d\n", inodeNum);
+
+	if(inodeNum > 0){
+		return 1; // Retorna um "Fake File Descriptor" só pra dizer que achou
+	}
+
+	return -1; // Não achou
 }
 	
 //Funcao para a leitura de um arquivo, a partir de um descritor de arquivo
