@@ -2,6 +2,7 @@
 *  myfs.c - Implementacao do sistema de arquivos MyFS
 *
 *  Autores: Isaac Nascimento Soares - 202376018
+*			Vitor Fernanes Gomes - 202365146AC
 *  Projeto: Trabalho Pratico II - Sistemas Operacionais
 *  Organizacao: Universidade Federal de Juiz de Fora
 *  Departamento: Dep. Ciencia da Computacao
@@ -68,8 +69,8 @@ unsigned int __allocBlock(Disk *d) {
 int myFSIsIdle (Disk *d) {
 
 	for(int i = 0; i<MAX_FDS; i++){
-		if(openFiles[i].used && openFiles[i].d == d);
-		return 0;
+		if(openFiles[i].used && openFiles[i].d == d)
+			return 0;
 	}
 
 	return 1;
@@ -104,9 +105,33 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 	inodeSetOwner(root, 0); // Usuário root
 	inodeSave(root);
 	free(root);
+
+	// Cria inodes vazios para depois
+	unsigned int inodesPerSector = inodeNumInodesPerSector();
+	unsigned int inodeAreaSectors = FIRST_DATA_BLOCK - inodeAreaBeginSector();
+	unsigned int numInodesToInit = inodesPerSector * inodeAreaSectors;
+	for(unsigned int i = 2; i <= numInodesToInit; i++){
+		Inode *inode = inodeCreate(i, d);
+		if(!inode){
+			// Continua mesmo se falhar em criar algum inode
+			continue;
+		}
+		// Deixa o inode limpo/vazio (já é feito por inodeCreate e inodeClear)
+		free(inode);
+	}
 	
 	// Retorna numero total de blocos (estimado)
 	return diskGetNumSectors(d) - firstDataBlock;
+}
+
+// Função auxiliar para encontrar slot livre
+int __findFreeSlot(void) {
+    for (int i = 0; i < MAX_FDS; i++) {
+        if (!openFiles[i].used) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 //Funcao para montagem/desmontagem do sistema de arquivos, se possível.
@@ -114,16 +139,63 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 //o superbloco na memoria. Na desmontagem (x=0), quaisquer dados pendentes
 //de gravacao devem ser persistidos no disco. Retorna um positivo se a
 //montagem ou desmontagem foi bem sucedida ou, caso contrario, 0.
-int myFSxMount (Disk *d, int x) {
-	return 0;
+int myFSxMount(Disk *d, int x) {
+    if (!d) return 0;
+
+    if (x == 1) { // Montagem
+        // Inicializa tabela de arquivos abertos
+        for (int i = 0; i < MAX_FDS; i++) {
+            openFiles[i].used = 0;
+        }
+        return 1;
+    }
+
+    if (x == 0) { // Desmontagem
+        return 1;
+    }
+
+    return 0;
 }
 
 //Funcao para abertura de um arquivo, a partir do caminho especificado
 //em path, no disco montado especificado em d, no modo Read/Write,
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
-int myFSOpen (Disk *d, const char *path) {
-	return -1;
+int myFSOpen(Disk *d, const char *path) {
+    if (!d || !path) return -1;
+    
+    // Encontra algum slot livre
+    int slot = __findFreeSlot();
+    if (slot < 0) return -1;
+    
+    // Busca um inode livre (começando do 2, pq 1 é a raiz)
+    unsigned int inodeNum = inodeFindFreeInode(2, d);
+    if (inodeNum == 0) return -1;
+    
+    // Cria o inode
+    Inode *inode = inodeCreate(inodeNum, d);
+    if (!inode) return -1;
+    
+    // Configura como arquivo regular
+    inodeSetFileType(inode, FILETYPE_REGULAR);
+    inodeSetFileSize(inode, 0);
+    inodeSetOwner(inode, 0);
+    inodeSetRefCount(inode, 1);
+    
+    // Salva o inode
+    if (inodeSave(inode) < 0) {
+        free(inode);
+        return -1;
+    }
+    free(inode);
+    
+    // Configura o file handle
+    openFiles[slot].used = 1;
+    openFiles[slot].inodeNum = inodeNum;
+    openFiles[slot].cursor = 0;
+    openFiles[slot].d = d;
+    
+    return slot + 1; // FDs começam em 1
 }
 	
 //Funcao para a leitura de um arquivo, a partir de um descritor de arquivo
@@ -152,47 +224,6 @@ int myFSClose (int fd) {
 	return -1;
 }
 
-//Funcao para abertura de um diretorio, a partir do caminho
-//especificado em path, no disco indicado por d, no modo Read/Write,
-//criando o diretorio se nao existir. Retorna um descritor de arquivo,
-//em caso de sucesso. Retorna -1, caso contrario.
-int myFSOpenDir (Disk *d, const char *path) {
-	return -1;
-}
-
-//Funcao para a leitura de um diretorio, identificado por um descritor
-//de arquivo existente. Os dados lidos correspondem a uma entrada de
-//diretorio na posicao atual do cursor no diretorio. O nome da entrada
-//e' copiado para filename, como uma string terminada em \0 (max 255+1).
-//O numero do inode correspondente 'a entrada e' copiado para inumber.
-//Retorna 1 se uma entrada foi lida, 0 se fim de diretorio ou -1 caso
-//mal sucedido
-int myFSReadDir (int fd, char *filename, unsigned int *inumber) {
-	return -1;
-}
-
-//Funcao para adicionar uma entrada a um diretorio, identificado por um
-//descritor de arquivo existente. A nova entrada tera' o nome indicado
-//por filename e apontara' para o numero de i-node indicado por inumber.
-//Retorna 0 caso bem sucedido, ou -1 caso contrario.
-int myFSLink (int fd, const char *filename, unsigned int inumber) {
-	return -1;
-}
-
-//Funcao para remover uma entrada existente em um diretorio, 
-//identificado por um descritor de arquivo existente. A entrada e'
-//identificada pelo nome indicado em filename. Retorna 0 caso bem
-//sucedido, ou -1 caso contrario.
-int myFSUnlink (int fd, const char *filename) {
-	return -1;
-}
-
-//Funcao para fechar um diretorio, identificado por um descritor de
-//arquivo existente. Retorna 0 caso bem sucedido, ou -1 caso contrario.	
-int myFSCloseDir (int fd) {
-	return -1;
-}
-
 //Funcao para instalar seu sistema de arquivos no S.O., registrando-o junto
 //ao virtual FS (vfs). Retorna um identificador unico (slot), caso
 //o sistema de arquivos tenha sido registrado com sucesso.
@@ -209,11 +240,6 @@ int installMyFS (void) {
 	fsInfo->readFn = myFSRead;
 	fsInfo->writeFn = myFSWrite;
 	fsInfo->closeFn = myFSClose;
-	fsInfo->opendirFn = myFSOpenDir;
-	fsInfo->readdirFn = myFSReadDir;
-	fsInfo->linkFn = myFSLink;
-	fsInfo->unlinkFn = myFSUnlink;
-	fsInfo->closedirFn = myFSCloseDir;
 
 	return vfsRegisterFS(fsInfo);
 }
