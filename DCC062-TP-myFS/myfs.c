@@ -2,6 +2,7 @@
 *  myfs.c - Implementacao do sistema de arquivos MyFS
 *
 *  Autores: Isaac Nascimento Soares - 202376018
+*           Vitor Fernandes Gomes - 202365146AC
 *  Projeto: Trabalho Pratico II - Sistemas Operacionais
 *  Organizacao: Universidade Federal de Juiz de Fora
 *  Departamento: Dep. Ciencia da Computacao
