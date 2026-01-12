@@ -173,6 +173,20 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 	inodeSetOwner(root, 0); // Usuário root
 	inodeSave(root);
 	free(root);
+
+	// Cria inodes vazios para depois
+	unsigned int inodesPerSector = inodeNumInodesPerSector();
+	unsigned int inodeAreaSectors = FIRST_DATA_BLOCK - inodeAreaBeginSector();
+	unsigned int numInodesToInit = inodesPerSector * inodeAreaSectors;
+	for(unsigned int i = 2; i <= numInodesToInit; i++){
+		Inode *inode = inodeCreate(i, d);
+		if(!inode){
+			// Continua mesmo se falhar em criar algum inode
+			continue;
+		}
+		// Deixa o inode limpo/vazio (já é feito por inodeCreate e inodeClear)
+		free(inode);
+	}
 	
 	// Retorna numero total de blocos (estimado)
 	return diskGetNumSectors(d) - firstDataBlock;
