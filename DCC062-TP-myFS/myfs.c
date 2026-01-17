@@ -161,43 +161,163 @@ int myFSxMount(Disk *d, int x) {
 //em path, no disco montado especificado em d, no modo Read/Write,
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
+
+
+// Retorna 0 em sucesso, -1 em erro
+int __extractFileName(const char *path, char *outName) {
+    const char *p = path;
+    while (*p == '/') p++;
+    
+    if (*p == '\0') return -1;      // Caminho vazio
+    if (strchr(p, '/')) return -1;  // Subdiretórios não suportados
+
+    strncpy(outName, p, MAX_FILENAME_LENGTH);
+    outName[MAX_FILENAME_LENGTH] = '\0';
+    return 0;
+}
+
+// Retorna o numero do Inode se achar, ou 0 se não achar
+unsigned int __findInodeInDir(Disk *d, Inode *dir, const char *name) {
+    unsigned char sector[DISK_SECTORDATASIZE];
+    int entriesPerSector = DISK_SECTORDATASIZE / sizeof(DirEntry);
+
+    for (unsigned int b = 0; ; b++) {
+        unsigned int blockAddr = inodeGetBlockAddr(dir, b);
+        if (blockAddr == 0) break;
+        
+        if (diskReadSector(d, blockAddr, sector) < 0) continue;
+        
+        DirEntry *entries = (DirEntry *)sector;
+        for (int i = 0; i < entriesPerSector; i++) {
+            if (entries[i].inode != 0 && 
+                strncmp(entries[i].name, name, MAX_FILENAME_LENGTH) == 0) {
+                return entries[i].inode;
+            }
+        }
+    }
+    return 0;
+}
+
+// Retorna 0 em sucesso, -1 em erro
+int __addDirEntry(Disk *d, Inode *dir, unsigned int newInodeNum, const char *name) {
+    unsigned char sector[DISK_SECTORDATASIZE];
+    int entriesPerSector = DISK_SECTORDATASIZE / sizeof(DirEntry);
+    
+    // Tenta achar um buraco em blocos existentes
+    for (unsigned int b = 0; ; b++) {
+        unsigned int blockAddr = inodeGetBlockAddr(dir, b);
+        if (blockAddr == 0) break; // Acabaram os blocos existentes
+
+        if (diskReadSector(d, blockAddr, sector) < 0) continue;
+        DirEntry *entries = (DirEntry *)sector;
+
+        for (int i = 0; i < entriesPerSector; i++) {
+            if (entries[i].inode == 0) { // Achou slot livre
+                entries[i].inode = newInodeNum;
+                strncpy(entries[i].name, name, MAX_FILENAME_LENGTH);
+                entries[i].name[MAX_FILENAME_LENGTH] = '\0';
+                
+                if (diskWriteSector(d, blockAddr, sector) < 0) return -1;
+                
+                // Atualiza tamanho se necessário (lógica simplificada de max size)
+                unsigned int endPos = b * DISK_SECTORDATASIZE + (i + 1) * sizeof(DirEntry);
+                if (inodeGetFileSize(dir) < endPos) {
+                    inodeSetFileSize(dir, endPos);
+                    inodeSave(dir);
+                }
+                return 0;
+            }
+        }
+    }
+
+    // Se chegou aqui, não achou slot livre. Precisa alocar novo bloco.
+    unsigned int newBlock = __allocBlock(d);
+    if (newBlock == 0) return -1;
+
+    if (inodeAddBlock(dir, newBlock) < 0) return -1;
+
+    // Prepara o novo bloco
+    memset(sector, 0, DISK_SECTORDATASIZE);
+    DirEntry *entries = (DirEntry *)sector;
+    
+    entries[0].inode = newInodeNum;
+    strncpy(entries[0].name, name, MAX_FILENAME_LENGTH);
+    entries[0].name[MAX_FILENAME_LENGTH] = '\0';
+
+    if (diskWriteSector(d, newBlock, sector) < 0) return -1;
+
+    // Atualiza tamanho do diretório
+    // Calcula quantos blocos existem agora
+    unsigned int numBlocks = 0;
+    while(inodeGetBlockAddr(dir, numBlocks) != 0) numBlocks++;
+    
+    // O tamanho é (numBlocks - 1) * 512 + tamanho de 1 entrada
+    unsigned int newSize = (numBlocks - 1) * DISK_SECTORDATASIZE + sizeof(DirEntry);
+    inodeSetFileSize(dir, newSize);
+    inodeSave(dir);
+
+    return 0;
+}
+
+// myFSOpen
 int myFSOpen(Disk *d, const char *path) {
     if (!d || !path) return -1;
+
+    char name[MAX_FILENAME_LENGTH + 1];
     
-    // Encontra algum slot livre
+    // 1. Extrair e validar nome
+    if (__extractFileName(path, name) < 0) return -1;
+
+    // 2. Achar slot livre na memória
     int slot = __findFreeSlot();
     if (slot < 0) return -1;
-    
-    // Busca um inode livre (começando do 2, pq 1 é a raiz)
-    unsigned int inodeNum = inodeFindFreeInode(2, d);
-    if (inodeNum == 0) return -1;
-    
-    // Cria o inode
-    Inode *inode = inodeCreate(inodeNum, d);
-    if (!inode) return -1;
-    
-    // Configura como arquivo regular
-    inodeSetFileType(inode, FILETYPE_REGULAR);
-    inodeSetFileSize(inode, 0);
-    inodeSetOwner(inode, 0);
-    inodeSetRefCount(inode, 1);
-    
-    // Salva o inode
-    if (inodeSave(inode) < 0) {
+
+    Inode *root = inodeLoad(1, d);
+    if (!root) return -1;
+
+    // 3. Tentar encontrar o arquivo
+    unsigned int inodeNum = __findInodeInDir(d, root, name);
+
+    if (inodeNum > 0) {
+        // CASO 1: Arquivo Existe
+        Inode *inode = inodeLoad(inodeNum, d);
+        if (!inode) { free(root); return -1; }
+        
+        inodeSetRefCount(inode, inodeGetRefCount(inode) + 1);
+        inodeSave(inode);
         free(inode);
-        return -1;
+    } else {
+        // CASO 2: Arquivo Novo
+        inodeNum = inodeFindFreeInode(2, d);
+        if (inodeNum == 0) { free(root); return -1; }
+
+        // Criar o Inode do arquivo
+        Inode *newInode = inodeCreate(inodeNum, d);
+        if (!newInode) { free(root); return -1; }
+        
+        inodeSetFileType(newInode, FILETYPE_REGULAR);
+        inodeSetRefCount(newInode, 1);
+        inodeSave(newInode);
+        free(newInode);
+
+        // Adicionar entrada no diretório pai (root)
+        if (__addDirEntry(d, root, inodeNum, name) < 0) {
+            // Se falhar adicionar no diretório, idealmente deveríamos limpar o inode criado
+            free(root);
+            return -1; 
+        }
     }
-    free(inode);
-    
-    // Configura o file handle
+
+    // 4. Configurar o handle
     openFiles[slot].used = 1;
     openFiles[slot].inodeNum = inodeNum;
     openFiles[slot].cursor = 0;
     openFiles[slot].d = d;
-    
-    return slot + 1; // FDs começam em 1
+
+    free(root);
+    return slot + 1;
 }
-	
+
 //Funcao para a leitura de um arquivo, a partir de um descritor de arquivo
 //existente. Os dados devem ser lidos a partir da posicao atual do cursor
 //e copiados para buf. Terao tamanho maximo de nbytes. Ao fim, o cursor
@@ -215,7 +335,7 @@ int myFSRead (int fd, char *buf, unsigned int nbytes) {
 //proximo byte apos o ultimo escrito. Retorna o numero de bytes
 //efetivamente escritos em caso de sucesso ou -1, caso contrario
 int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
-	return -1;
+   	return -1;
 }
 
 //Funcao para fechar um arquivo, a partir de um descritor de arquivo
