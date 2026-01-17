@@ -292,8 +292,53 @@ int myFSRead (int fd, char *buf, unsigned int nbytes) {
 //ter posicao atualizada para que a proxima operacao ocorra a partir do
 //proximo byte apos o ultimo escrito. Retorna o numero de bytes
 //efetivamente escritos em caso de sucesso ou -1, caso contrario
+
 int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
-	return -1;
+    int idx = fd - 1;
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    MyFileHandle *h = &openFiles[idx];
+    Inode *inode = inodeLoad(h->inodeNum, h->d);
+    if (!inode) return -1;
+
+    unsigned int bytesWritten = 0;
+    unsigned char sectorBuffer[DISK_SECTORDATASIZE];
+
+    while (bytesWritten < nbytes) {
+        unsigned int logicalBlock = (h->cursor) / DISK_SECTORDATASIZE;
+        unsigned int offsetInBlock = (h->cursor) % DISK_SECTORDATASIZE;
+        unsigned int physSector = inodeGetBlockAddr(inode, logicalBlock);
+
+        // Se o bloco não existe, aloca um novo
+        if (physSector == 0) {
+            physSector = __allocBlock(h->d);
+            if (physSector == 0) break; // Disco cheio
+            inodeSetBlockAddr(inode, logicalBlock, physSector);
+        }
+
+        // Lê o setor atual para preservar dados
+        diskReadSector(h->d, physSector, sectorBuffer);
+
+        unsigned int canWrite = DISK_SECTORDATASIZE - offsetInBlock;
+        unsigned int remaining = nbytes - bytesWritten;
+        unsigned int toCopy = (remaining < canWrite) ? remaining : canWrite;
+
+        memcpy(sectorBuffer + offsetInBlock, buf + bytesWritten, toCopy);
+        
+        if (diskWriteSector(h->d, physSector, sectorBuffer) < 0) break;
+
+        bytesWritten += toCopy;
+        h->cursor += toCopy;
+    }
+
+    // Atualiza tamanho do arquivo se cresceu
+    if (h->cursor > inodeGetFileSize(inode)) {
+        inodeSetFileSize(inode, h->cursor);
+    }
+
+    inodeSave(inode);
+    free(inode);
+    return bytesWritten;
 }
 
 //Funcao para fechar um arquivo, a partir de um descritor de arquivo
