@@ -1,8 +1,10 @@
 /*
 *  myfs.c - Implementacao do sistema de arquivos MyFS
 *
-*  Autores: Isaac Nascimento Soares - 202376018
+*  Autores: Eduarda Pereira Mourão Nunes - 202376015
+*           Isaac Nascimento Soares - 202376018
 *           Vitor Fernandes Gomes - 202365146AC
+*
 *  Projeto: Trabalho Pratico II - Sistemas Operacionais
 *  Organizacao: Universidade Federal de Juiz de Fora
 *  Departamento: Dep. Ciencia da Computacao
@@ -248,8 +250,49 @@ int myFSOpen (Disk *d, const char *path) {
 //deve ter posicao atualizada para que a proxima operacao ocorra a partir
 //do próximo byte apos o ultimo lido. Retorna o numero de bytes
 //efetivamente lidos em caso de sucesso ou -1, caso contrario.
+
 int myFSRead (int fd, char *buf, unsigned int nbytes) {
-	return -1;
+	
+    int idx = fd - 1; // Ajuste do FD para o índice do array
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    MyFileHandle *h = &openFiles[idx];
+    Inode *inode = inodeLoad(h->inodeNum, h->d);
+    if (!inode) return -1;
+
+    unsigned int fileSize = inodeGetFileSize(inode);
+    if (h->cursor >= fileSize) {
+        free(inode);
+        return 0; // Fim do arquivo
+    }
+
+    // Não lê além do tamanho do arquivo
+    if (h->cursor + nbytes > fileSize) {
+        nbytes = fileSize - h->cursor;
+    }
+
+    unsigned int bytesRead = 0;
+    unsigned char sectorBuffer[DISK_SECTORDATASIZE];
+
+    while (bytesRead < nbytes) {
+        unsigned int logicalBlock = (h->cursor) / DISK_SECTORDATASIZE;
+        unsigned int offsetInBlock = (h->cursor) % DISK_SECTORDATASIZE;
+        unsigned int physSector = inodeGetBlockAddr(inode, logicalBlock);
+
+        if (diskReadSector(h->d, physSector, sectorBuffer) < 0) break;
+
+        unsigned int canRead = DISK_SECTORDATASIZE - offsetInBlock;
+        unsigned int remaining = nbytes - bytesRead;
+        unsigned int toCopy = (remaining < canRead) ? remaining : canRead;
+
+        memcpy(buf + bytesRead, sectorBuffer + offsetInBlock, toCopy);
+
+        bytesRead += toCopy;
+        h->cursor += toCopy;
+    }
+
+    free(inode);
+    return bytesRead;
 }
 
 //Funcao para a escrita de um arquivo, a partir de um descritor de arquivo
