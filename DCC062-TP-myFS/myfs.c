@@ -231,8 +231,41 @@ int myFSxMount(Disk *d, int x) {
 //em path, no disco montado especificado em d, no modo Read/Write,
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
-int myFSOpen (Disk *d, const char *path) {
-	return -1;
+int myFSOpen(Disk *d, const char *path) {
+    if (!d || !path) return -1;
+    
+    // Encontra algum slot livre
+    int slot = __findFreeSlot();
+    if (slot < 0) return -1;
+    
+    // Busca um inode livre (começando do 2, pq 1 é a raiz)
+    unsigned int inodeNum = inodeFindFreeInode(2, d);
+    if (inodeNum == 0) return -1;
+    
+    // Cria o inode
+    Inode *inode = inodeCreate(inodeNum, d);
+    if (!inode) return -1;
+    
+    // Configura como arquivo regular
+    inodeSetFileType(inode, FILETYPE_REGULAR);
+    inodeSetFileSize(inode, 0);
+    inodeSetOwner(inode, 0);
+    inodeSetRefCount(inode, 1);
+    
+    // Salva o inode
+    if (inodeSave(inode) < 0) {
+        free(inode);
+        return -1;
+    }
+    free(inode);
+    
+    // Configura o file handle
+    openFiles[slot].used = 1;
+    openFiles[slot].inodeNum = inodeNum;
+    openFiles[slot].cursor = 0;
+    openFiles[slot].d = d;
+    
+    return slot + 1; // FDs começam em 1
 }
 	
 //Funcao para a leitura de um arquivo, a partir de um descritor de arquivo
