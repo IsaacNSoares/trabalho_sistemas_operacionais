@@ -331,7 +331,7 @@ int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
     if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
 
     MyFileHandle *h = &openFiles[idx];
-    Inode *inode = inodeLoad(h->inodeNum, h->d);
+    Inode *inode = inodeLoad(h->inodeNum, h->d); //
     if (!inode) return -1;
 
     unsigned int bytesWritten = 0;
@@ -340,16 +340,20 @@ int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
     while (bytesWritten < nbytes) {
         unsigned int logicalBlock = (h->cursor) / DISK_SECTORDATASIZE;
         unsigned int offsetInBlock = (h->cursor) % DISK_SECTORDATASIZE;
+        
+        // Tenta obter o endereço do bloco atual
         unsigned int physSector = inodeGetBlockAddr(inode, logicalBlock);
 
-        // Se o bloco não existe, aloca um novo
+        // Se o bloco não existe, aloca e adiciona
         if (physSector == 0) {
             physSector = __allocBlock(h->d);
             if (physSector == 0) break; // Disco cheio
-            inodeSetBlockAddr(inode, logicalBlock, physSector);
+            
+            if (inodeAddBlock(inode, physSector) == -1) {
+                break;
+            }
         }
 
-        // Lê o setor atual para preservar dados
         diskReadSector(h->d, physSector, sectorBuffer);
 
         unsigned int canWrite = DISK_SECTORDATASIZE - offsetInBlock;
@@ -364,12 +368,12 @@ int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
         h->cursor += toCopy;
     }
 
-    // Atualiza tamanho do arquivo se cresceu
+    // Atualiza o tamanho do arquivo no i-node se ele cresceu
     if (h->cursor > inodeGetFileSize(inode)) {
         inodeSetFileSize(inode, h->cursor);
+        inodeSave(inode); // Salva as alterações de tamanho
     }
 
-    inodeSave(inode);
     free(inode);
     return bytesWritten;
 }
