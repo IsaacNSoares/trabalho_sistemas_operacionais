@@ -381,7 +381,16 @@ int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
 //Funcao para fechar um arquivo, a partir de um descritor de arquivo
 //existente. Retorna 0 caso bem sucedido, ou -1 caso contrario
 int myFSClose (int fd) {
-	return -1;
+    int idx = fd - 1; // Ajuste para o índice do array
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    // Libera o slot na tabela de arquivos abertos
+    openFiles[idx].used = 0;
+    openFiles[idx].inodeNum = 0;
+    openFiles[idx].cursor = 0;
+    openFiles[idx].d = NULL;
+
+    return 0;
 }
 
 //Funcao para instalar seu sistema de arquivos no S.O., registrando-o junto
