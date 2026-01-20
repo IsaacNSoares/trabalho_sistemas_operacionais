@@ -1,8 +1,10 @@
 /*
 *  myfs.c - Implementacao do sistema de arquivos MyFS
 *
-*  Autores: Isaac Nascimento Soares - 202376018
-*			Vitor Fernanes Gomes - 202365146AC
+*  Autores: Eduarda Pereira Mourão Nunes - 202376015
+*           Isaac Nascimento Soares - 202376018
+*           Vitor Fernandes Gomes - 202365146AC
+*
 *  Projeto: Trabalho Pratico II - Sistemas Operacionais
 *  Organizacao: Universidade Federal de Juiz de Fora
 *  Departamento: Dep. Ciencia da Computacao
@@ -61,6 +63,74 @@ unsigned int __allocBlock(Disk *d) {
 	diskWriteSector(d, SECTOR_FREE_BLOCK_MAP, buffer);
 
 	return nextFree;
+}
+
+// Busca um inode pelo nome dentro de um diretório pai
+// Retorna o numero do inode se achar, ou 0 se não achar
+unsigned int __findInodeInDir(Disk *d, unsigned int parentInodeNum, const char *name){
+
+	Inode *parent = inodeLoad(parentInodeNum, d);
+	if(!parent){
+		return 0;
+	}
+
+	unsigned int numBlocks = inodeGetFileSize(parent) / DISK_SECTORDATASIZE;
+	if(inodeGetFileSize(parent) % DISK_SECTORDATASIZE != 0){
+		numBlocks++;
+	}
+
+	unsigned char buffer[DISK_SECTORDATASIZE];
+	DirEntry *entry;
+
+	for(unsigned int i = 0; i < numBlocks; i++){
+		unsigned int blockAddr = inodeGetBlockAddr(parent, i);
+		if(blockAddr == 0){
+			continue;
+		}
+
+		if(diskReadSector(d, blockAddr, buffer) == 0){
+			entry = (DirEntry *)buffer;
+			if(entry->inode != 0 && strcmp(entry->name, name) == 0){
+				free(parent);
+				return entry->inode;
+			}
+		}
+
+	}
+
+	free(parent);
+	return 0;
+}
+
+// Resolve um caminho e retorna o inode correspondente
+// Retorna 0 se não existir
+unsigned int __resolvePath(Disk *d, const char *path){
+
+	if(path[0] != '/'){
+		return 0; // O caminho deve ser absoluto
+	}
+
+	if(strcmp(path, "/") == 0){
+		return 1; // Raiz é sempre 1
+	}
+
+	char pathCopy[MAX_FILENAME_LENGTH + 1];
+	strncpy(pathCopy, path, MAX_FILENAME_LENGTH);
+
+	unsigned int currentInode = 1;
+	char *token = strtok(pathCopy, "/");
+
+	while(token != NULL){
+		unsigned int nextInode = __findInodeInDir(d, currentInode, token);
+		if(nextInode == 0){
+			return 0; // Não achou parte do caminho
+		}
+
+		currentInode = nextInode;
+		token = strtok(NULL, "/");
+	}
+
+	return currentInode;
 }
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
@@ -324,8 +394,49 @@ int myFSOpen(Disk *d, const char *path) {
 //deve ter posicao atualizada para que a proxima operacao ocorra a partir
 //do próximo byte apos o ultimo lido. Retorna o numero de bytes
 //efetivamente lidos em caso de sucesso ou -1, caso contrario.
+
 int myFSRead (int fd, char *buf, unsigned int nbytes) {
-	return -1;
+	
+    int idx = fd - 1; // Ajuste do FD para o índice do array
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    MyFileHandle *h = &openFiles[idx];
+    Inode *inode = inodeLoad(h->inodeNum, h->d);
+    if (!inode) return -1;
+
+    unsigned int fileSize = inodeGetFileSize(inode);
+    if (h->cursor >= fileSize) {
+        free(inode);
+        return 0; // Fim do arquivo
+    }
+
+    // Não lê além do tamanho do arquivo
+    if (h->cursor + nbytes > fileSize) {
+        nbytes = fileSize - h->cursor;
+    }
+
+    unsigned int bytesRead = 0;
+    unsigned char sectorBuffer[DISK_SECTORDATASIZE];
+
+    while (bytesRead < nbytes) {
+        unsigned int logicalBlock = (h->cursor) / DISK_SECTORDATASIZE;
+        unsigned int offsetInBlock = (h->cursor) % DISK_SECTORDATASIZE;
+        unsigned int physSector = inodeGetBlockAddr(inode, logicalBlock);
+
+        if (diskReadSector(h->d, physSector, sectorBuffer) < 0) break;
+
+        unsigned int canRead = DISK_SECTORDATASIZE - offsetInBlock;
+        unsigned int remaining = nbytes - bytesRead;
+        unsigned int toCopy = (remaining < canRead) ? remaining : canRead;
+
+        memcpy(buf + bytesRead, sectorBuffer + offsetInBlock, toCopy);
+
+        bytesRead += toCopy;
+        h->cursor += toCopy;
+    }
+
+    free(inode);
+    return bytesRead;
 }
 
 //Funcao para a escrita de um arquivo, a partir de um descritor de arquivo
@@ -334,14 +445,72 @@ int myFSRead (int fd, char *buf, unsigned int nbytes) {
 //ter posicao atualizada para que a proxima operacao ocorra a partir do
 //proximo byte apos o ultimo escrito. Retorna o numero de bytes
 //efetivamente escritos em caso de sucesso ou -1, caso contrario
+
 int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
-   	return -1;
+    int idx = fd - 1;
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    MyFileHandle *h = &openFiles[idx];
+    Inode *inode = inodeLoad(h->inodeNum, h->d); //
+    if (!inode) return -1;
+
+    unsigned int bytesWritten = 0;
+    unsigned char sectorBuffer[DISK_SECTORDATASIZE];
+
+    while (bytesWritten < nbytes) {
+        unsigned int logicalBlock = (h->cursor) / DISK_SECTORDATASIZE;
+        unsigned int offsetInBlock = (h->cursor) % DISK_SECTORDATASIZE;
+        
+        // Tenta obter o endereço do bloco atual
+        unsigned int physSector = inodeGetBlockAddr(inode, logicalBlock);
+
+        // Se o bloco não existe, aloca e adiciona
+        if (physSector == 0) {
+            physSector = __allocBlock(h->d);
+            if (physSector == 0) break; // Disco cheio
+            
+            if (inodeAddBlock(inode, physSector) == -1) {
+                break;
+            }
+        }
+
+        diskReadSector(h->d, physSector, sectorBuffer);
+
+        unsigned int canWrite = DISK_SECTORDATASIZE - offsetInBlock;
+        unsigned int remaining = nbytes - bytesWritten;
+        unsigned int toCopy = (remaining < canWrite) ? remaining : canWrite;
+
+        memcpy(sectorBuffer + offsetInBlock, buf + bytesWritten, toCopy);
+        
+        if (diskWriteSector(h->d, physSector, sectorBuffer) < 0) break;
+
+        bytesWritten += toCopy;
+        h->cursor += toCopy;
+    }
+
+    // Atualiza o tamanho do arquivo no i-node se ele cresceu
+    if (h->cursor > inodeGetFileSize(inode)) {
+        inodeSetFileSize(inode, h->cursor);
+        inodeSave(inode); // Salva as alterações de tamanho
+    }
+
+    free(inode);
+    return bytesWritten;
 }
 
 //Funcao para fechar um arquivo, a partir de um descritor de arquivo
 //existente. Retorna 0 caso bem sucedido, ou -1 caso contrario
 int myFSClose (int fd) {
-	return -1;
+    int idx = fd - 1; // Ajuste para o índice do array
+    if (idx < 0 || idx >= MAX_FDS || !openFiles[idx].used) return -1;
+
+    // Libera o slot na tabela de arquivos abertos
+    openFiles[idx].used = 0;
+    openFiles[idx].inodeNum = 0;
+    openFiles[idx].cursor = 0;
+    openFiles[idx].d = NULL;
+
+    return 0;
 }
 
 //Funcao para instalar seu sistema de arquivos no S.O., registrando-o junto
